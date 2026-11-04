@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Base vs Instruct</title>
+<style>
+  @font-face { font-family: "Plex Mono"; font-weight: 400; font-style: normal; src: url(fonts/plex-mono-400.woff2) format("woff2"); }
+  @font-face { font-family: "Plex Mono"; font-weight: 400; font-style: italic; src: url(fonts/plex-mono-400-italic.woff2) format("woff2"); }
+  @font-face { font-family: "Plex Mono"; font-weight: 500; font-style: normal; src: url(fonts/plex-mono-500.woff2) format("woff2"); }
+
+  :root {
+    --paper: #faf9f5;
+    --ink: #22211e;
+    --soft: #55534d;
+    --faint: #a19e95;
+    --rule: #e2dfd7;
+    --size: 17px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font: 400 var(--size)/1.6 "Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    -webkit-font-smoothing: antialiased;
+    display: grid;
+    grid-template-columns: 1fr 1px 1fr;
+  }
+  .divider { background: var(--rule); }
+  .pane {
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 40px 80px;
+    min-width: 0;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 36px;
+  }
+  .name { font-weight: 500; letter-spacing: -0.01em; }
+  .meta { color: var(--faint); font-size: 0.72em; white-space: nowrap; }
+  textarea {
+    display: block;
+    width: 100%;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    resize: none;
+    overflow: hidden;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    outline: none;
+    caret-color: var(--ink);
+  }
+  textarea::placeholder { color: var(--faint); }
+  .out {
+    margin-top: 28px;
+    padding-top: 28px;
+    border-top: 1px solid var(--rule);
+    color: var(--soft);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .out:empty { display: none; }
+  .out.note { color: var(--faint); font-style: italic; }
+  .out.running::after {
+    content: "";
+    display: inline-block;
+    width: 0.55em;
+    height: 1.1em;
+    margin-left: 1px;
+    vertical-align: -0.2em;
+    background: var(--faint);
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .stats { margin-top: 18px; color: var(--faint); font-size: 0.72em; min-height: 1.6em; }
+  @media (max-width: 720px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 1fr 1px 1fr; }
+    .pane { height: auto; padding: 20px 16px 40px; }
+  }
+</style>
+</head>
+<body>
+<section class="pane" id="pane0">
+  <header><span class="name"></span><span class="meta"></span></header>
+  <textarea rows="1" spellcheck="false" placeholder="type a prompt, enter to run"></textarea>
+  <div class="out"></div>
+  <div class="stats"></div>
+</section>
+<div class="divider"></div>
+<section class="pane" id="pane1">
+  <header><span class="name"></span><span class="meta"></span></header>
+  <textarea rows="1" spellcheck="false" placeholder="type a prompt, enter to run"></textarea>
+  <div class="out"></div>
+  <div class="stats"></div>
+</section>
+
+<script>
+const panes = [0, 1].map(i => {
+  const el = document.getElementById("pane" + i);
+  return {
+    el,
+    name: el.querySelector(".name"),
+    meta: el.querySelector(".meta"),
+    input: el.querySelector("textarea"),
+    out: el.querySelector(".out"),
+    stats: el.querySelector(".stats"),
+    ready: false,
+    ctrl: null,
+  };
+});
+
+function autosize(t) {
+  t.style.height = "auto";
+  t.style.height = t.scrollHeight + "px";
+}
+
+panes.forEach((p, i) => {
+  const other = panes[1 - i];
+  p.input.addEventListener("input", () => {
+    other.input.value = p.input.value;
+    autosize(p.input);
+    autosize(other.input);
+  });
+  p.input.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      runAll();
+    } else if (e.key === "Escape") {
+      panes.forEach(stop);
+    }
+  });
+});
+window.addEventListener("resize", () => panes.forEach(p => autosize(p.input)));
+
+function stop(p) {
+  if (p.ctrl) p.ctrl.abort();
+  p.ctrl = null;
+  p.out.classList.remove("running");
+}
+
+function runAll() {
+  const prompt = panes[0].input.value;
+  if (!prompt.trim()) return;
+  panes.forEach(p => run(p, prompt));
+}
+
+async function run(p, prompt) {
+  stop(p);
+  if (!p.ready) return;
+  const ctrl = new AbortController();
+  p.ctrl = ctrl;
+  p.out.textContent = "";
+  p.out.classList.remove("note");
+  p.out.classList.add("running");
+  p.stats.textContent = "";
+  try {
+    const res = await fetch(p.url + "/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+      signal: ctrl.signal,
+    });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        if (!line.startsWith("data: ")) continue;
+        const msg = JSON.parse(line.slice(6));
+        if (msg.text) {
+          p.out.textContent += msg.text;
+        } else if (msg.done && msg.finish !== "preempted") {
+          const rate = msg.seconds > 0 ? (msg.tokens / msg.seconds).toFixed(0) : "–";
+          const why = msg.finish === "length" ? " · hit max tokens" : "";
+          p.stats.textContent = `${msg.tokens} tokens · ${rate} tok/s${why}`;
+        }
+      }
+    }
+  } catch (e) {
+    if (e.name !== "AbortError") {
+      p.out.classList.add("note");
+      p.out.textContent = "server unreachable";
+    }
+  } finally {
+    if (p.ctrl === ctrl) {
+      p.ctrl = null;
+      p.out.classList.remove("running");
+    }
+  }
+}
+
+async function waitReady(p) {
+  p.out.classList.add("note");
+  p.out.textContent = "loading model…";
+  for (;;) {
+    try {
+      const r = await fetch(p.url + "/");
+      const { sampling: s } = await r.json();
+      p.meta.textContent = `temp ${s.temperature} · top_p ${s.top_p} · top_k ${s.top_k}`;
+      p.ready = true;
+      if (p.out.textContent === "loading model…") {
+        p.out.textContent = "";
+        p.out.classList.remove("note");
+      }
+      return;
+    } catch {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+}
+
+(async () => {
+  const cfg = await (await fetch("config.json")).json();
+  cfg.forEach((c, i) => {
+    const p = panes[i];
+    p.url = `http://${location.hostname}:${c.port}`;
+    p.name.textContent = c.name;
+    waitReady(p);
+  });
+  panes[0].input.focus();
+})();
+</script>
+</body>
+</html>
