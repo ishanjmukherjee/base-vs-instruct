@@ -1,6 +1,6 @@
 """Launch the base and instruct workers and serve the demo page.
 
-    uv run serve.py            # then open http://127.0.0.1:8000
+    uv run serve.py            # then open http://127.0.0.1:8800
 """
 
 import json
@@ -13,7 +13,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).parent
-PORT = int(os.environ.get("PORT", 8000))
+PORT = int(os.environ.get("PORT", 8800))
 
 PANES = [
     {
@@ -34,6 +34,30 @@ PANES = [
 ]
 if not Path(PANES[1]["model"]).exists():
     PANES[1]["model"] = "mlx-community/gemma-4-26b-a4b-it-4bit"
+
+CONFIG = json.dumps(
+    [{"name": p["name"], "port": p["port"], "mode": p["mode"]} for p in PANES]
+).encode()
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def log_message(self, fmt, *a):
+        pass
+
+    def do_GET(self):
+        if self.path == "/config.json":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(CONFIG)))
+            self.end_headers()
+            self.wfile.write(CONFIG)
+            return
+        super().do_GET()
+
+
+server = ThreadingHTTPServer(
+    ("127.0.0.1", PORT), partial(Handler, directory=str(HERE / "static"))
+)
 
 procs = [
     subprocess.Popen(
@@ -60,29 +84,6 @@ def shutdown(*_):
 signal.signal(signal.SIGINT, shutdown)
 signal.signal(signal.SIGTERM, shutdown)
 
-CONFIG = json.dumps(
-    [{"name": p["name"], "port": p["port"], "mode": p["mode"]} for p in PANES]
-).encode()
-
-
-class Handler(SimpleHTTPRequestHandler):
-    def log_message(self, fmt, *a):
-        pass
-
-    def do_GET(self):
-        if self.path == "/config.json":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(CONFIG)))
-            self.end_headers()
-            self.wfile.write(CONFIG)
-            return
-        super().do_GET()
-
-
-server = ThreadingHTTPServer(
-    ("127.0.0.1", PORT), partial(Handler, directory=str(HERE / "static"))
-)
 print(f"page on http://127.0.0.1:{PORT} (models load in the background)", flush=True)
 try:
     server.serve_forever()

@@ -8,7 +8,7 @@ pretrained model, and both sample with Google's published defaults from
 
 ```
 uv run serve.py
-open http://127.0.0.1:8000
+open http://127.0.0.1:8800
 ```
 
 The page loads at once. Each pane says "loading model…" until its worker is up,

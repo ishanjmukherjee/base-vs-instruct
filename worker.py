@@ -11,6 +11,7 @@ model's publisher ships with the weights.
 
 import argparse
 import json
+import os
 import queue
 import threading
 import time
@@ -177,6 +178,15 @@ class Handler(BaseHTTPRequestHandler):
                     latest += 1
 
 
+def exit_with_parent():
+    """Exit if the launcher dies, so a crashed serve.py can't strand ~15 GB."""
+    parent = os.getppid()
+    while os.getppid() == parent:
+        time.sleep(1)
+    os._exit(0)
+
+
+threading.Thread(target=exit_with_parent, daemon=True).start()
 threading.Thread(target=generation_loop, daemon=True).start()
 ready.wait()
 server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
