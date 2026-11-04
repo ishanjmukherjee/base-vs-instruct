@@ -44,6 +44,10 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *a):
         pass
 
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def do_GET(self):
         if self.path == "/config.json":
             self.send_response(200)
@@ -77,8 +81,11 @@ def shutdown(*_):
     for p in procs:
         p.terminate()
     for p in procs:
-        p.wait()
-    sys.exit(0)
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    os._exit(0)
 
 
 signal.signal(signal.SIGINT, shutdown)
